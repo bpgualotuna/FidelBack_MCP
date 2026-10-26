@@ -19,8 +19,9 @@ export class BcryptAdapter implements HasherPort {
   }
 
   async compare(plain: string, hash: string): Promise<boolean> {
-    if (hash.startsWith('scrypt:')) {
-      const [, salt, storedKey] = hash.split(':');
+    if (hash.startsWith('scrypt:') || hash.startsWith('scrypt$')) {
+      const sep = hash.startsWith('scrypt:') ? ':' : '$';
+      const [, salt, storedKey] = hash.split(sep);
       const derived = crypto.scryptSync(plain, salt, 64).toString('hex');
       return crypto.timingSafeEqual(Buffer.from(storedKey, 'hex'), Buffer.from(derived, 'hex'));
     }
