@@ -22,7 +22,6 @@ export class McpRegistryService {
   private readonly logger = new Logger(McpRegistryService.name);
   private readonly mcpServer: Server;
 
-  // In-memory store for fast inspection & graceful fallback if DB is not running
   private readonly executionLogs: McpToolExecutionResult[] = [];
 
   constructor(private readonly prisma: PrismaService) {
@@ -48,7 +47,7 @@ export class McpRegistryService {
     }));
 
     this.mcpServer.setRequestHandler(ListResourcesRequestSchema, async () => ({
-      resources: CLEARMINDS_MCP_RESOURCES.map((r) => ({
+      resources: CLEARMINDS_MCP_RESOURCES.map((r: McpResourceDefinition) => ({
         uri: r.uri,
         name: r.name,
         description: r.description,
@@ -57,7 +56,9 @@ export class McpRegistryService {
     }));
 
     this.mcpServer.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-      const resource = CLEARMINDS_MCP_RESOURCES.find((r) => r.uri === request.params.uri);
+      const resource = CLEARMINDS_MCP_RESOURCES.find(
+        (r: McpResourceDefinition) => r.uri === request.params.uri,
+      );
       if (!resource) {
         throw new Error(`Recurso MCP no encontrado: ${request.params.uri}`);
       }
@@ -194,30 +195,22 @@ export class McpRegistryService {
           const leadName = String(args.leadName || 'Prospecto Clear Minds');
           const leadContact = String(args.leadContact || 'Por confirmar');
           const productKey = String(args.productKey || 'custom_software');
-          const scheduledAtRaw = String(args.scheduledAt || new Date(Date.now() + 86400000).toISOString());
-          const notes = String(args.notes || '');
+          const scheduledAtRaw = String(
+            args.scheduledAt || new Date(Date.now() + 86400000).toISOString(),
+          );
 
-          let appointmentId = `apt_${Date.now()}`;
+          const appointmentCode = `APT-${Date.now().toString().slice(-6)}`;
           try {
-            const tenant = await this.prisma.tenant.findFirst();
-            if (tenant) {
-              const parsedDate = Number.isNaN(Date.parse(scheduledAtRaw))
-                ? new Date(Date.now() + 86400000)
-                : new Date(scheduledAtRaw);
-
-              const created = await this.prisma.appointment.create({
-                data: {
-                  tenantId: tenant.id,
-                  sessionId: args.sessionId ? String(args.sessionId) : null,
-                  leadName,
-                  leadContact,
-                  productKey,
-                  scheduledAt: parsedDate,
-                  notes,
-                },
-              });
-              appointmentId = created.id;
-            }
+            await this.prisma.appointment.create({
+              data: {
+                appointmentCode,
+                contactName: leadName,
+                contactEmail: leadContact,
+                productName: productKey,
+                scheduledDate: scheduledAtRaw.slice(0, 10),
+                scheduledTime: scheduledAtRaw.slice(11, 16) || '10:00',
+              },
+            });
           } catch (dbErr) {
             this.logger.debug(`Modo sin DB activa en agendar_cita: ${(dbErr as Error).message}`);
           }
@@ -227,14 +220,14 @@ export class McpRegistryService {
             success: true,
             timestamp,
             data: {
-              appointmentId,
+              appointmentCode,
               leadName,
               leadContact,
               productKey,
               scheduledAt: scheduledAtRaw,
-              meetingLink: `https://meet.clearminds.ec/fidel-${appointmentId.slice(-6)}`,
+              meetingLink: `https://meet.clearminds.ec/fidel-${appointmentCode.toLowerCase()}`,
             },
-            message: `Cita agendada para ${leadName} (${productKey}) en fecha/hora: ${scheduledAtRaw}.`,
+            message: `Cita agendada (${appointmentCode}) para ${leadName} (${productKey}) en fecha/hora: ${scheduledAtRaw}.`,
           };
           this.recordExecution(result);
           return result;
@@ -249,11 +242,10 @@ export class McpRegistryService {
 
           try {
             if (sessionId) {
-              await this.prisma.conversationSession.updateMany({
-                where: { id: sessionId },
+              await this.prisma.conversation.updateMany({
+                where: { sessionId },
                 data: {
-                  activeProductKey: productKey,
-                  extractedData: extractedFields as object,
+                  productLineId: productKey,
                 },
               });
             }
@@ -282,9 +274,9 @@ export class McpRegistryService {
           const reason = String(args.reason || 'Solicitud de atención personalizada');
 
           try {
-            await this.prisma.conversationSession.updateMany({
-              where: { id: sessionId },
-              data: { status: 'HUMAN_ACTIVE' },
+            await this.prisma.conversation.updateMany({
+              where: { sessionId },
+              data: { controlState: 'HUMAN_ACTIVE' },
             });
           } catch (dbErr) {
             this.logger.debug(`Modo sin DB activa en transferir_a_humano: ${(dbErr as Error).message}`);

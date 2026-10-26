@@ -1,11 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../context/database/prisma.service';
-import { CLEARMINDS_MCP_RESOURCES } from '../../mcp/infrastructure/resources/clearminds-catalog.resource';
-import { McpRegistryService } from '../../mcp/application/services/mcp-registry.service';
-import { McpToolExecutionResult } from '../../mcp/domain/interfaces/mcp-tool.port';
-import { CrmService } from '../../crm/application/services/crm.service';
+import { CLEARMINDS_MCP_RESOURCES } from '../../../mcp/infrastructure/resources/clearminds-catalog.resource';
+import { McpRegistryService } from '../../../mcp/application/services/mcp-registry.service';
+import {
+  McpResourceDefinition,
+  McpToolExecutionResult,
+} from '../../../mcp/domain/interfaces/mcp-tool.port';
+import { CrmService } from '../../../crm/application/services/crm.service';
 import { LlmGatewayAdapter } from '../../infrastructure/adapters/llm-gateway.adapter';
-import { ProductLineKey, StructuredExtractionItem } from '../../domain/interfaces/llm-gateway.port';
+import {
+  ProductLineKey,
+  StructuredExtractionItem,
+} from '../../domain/interfaces/llm-gateway.port';
 
 export interface InMemorySessionState {
   sessionId: string;
@@ -14,7 +20,11 @@ export interface InMemorySessionState {
   incrementalSummary: string;
   messagesCount: number;
   extractedFields: StructuredExtractionItem[];
-  history: Array<{ role: 'user' | 'assistant' | 'human_agent'; content: string; createdAt: string }>;
+  history: Array<{
+    role: 'user' | 'assistant' | 'human_agent';
+    content: string;
+    createdAt: string;
+  }>;
 }
 
 @Injectable()
@@ -37,8 +47,9 @@ export class ProcessInboundMessageUseCase {
     if (existing) return existing;
 
     const resource =
-      CLEARMINDS_MCP_RESOURCES.find((r) => r.productKey === initialProductKey) ??
-      CLEARMINDS_MCP_RESOURCES[0];
+      CLEARMINDS_MCP_RESOURCES.find(
+        (r: McpResourceDefinition) => r.productKey === initialProductKey,
+      ) ?? CLEARMINDS_MCP_RESOURCES[0];
 
     const created: InMemorySessionState = {
       sessionId,
@@ -46,7 +57,7 @@ export class ProcessInboundMessageUseCase {
       activeProductKey: initialProductKey,
       incrementalSummary: '',
       messagesCount: 0,
-      extractedFields: resource.requiredFields.map((key) => ({
+      extractedFields: resource.requiredFields.map((key: string) => ({
         key,
         value: 'Pendiente',
         status: 'missing',
@@ -69,9 +80,9 @@ export class ProcessInboundMessageUseCase {
     session.status = status;
 
     try {
-      await this.prisma.conversationSession.updateMany({
-        where: { id: sessionId },
-        data: { status },
+      await this.prisma.conversation.updateMany({
+        where: { sessionId },
+        data: { controlState: status },
       });
     } catch {
       // Fallback in-memory
@@ -114,7 +125,6 @@ export class ProcessInboundMessageUseCase {
     });
     session.messagesCount += 1;
 
-    // 1. Modo Espejo / Handoff Humano: Si un humano está atendiendo o el mensaje viene del agente humano
     if (session.status === 'HUMAN_ACTIVE' || incomingRole === 'human_agent') {
       session.status = 'HUMAN_ACTIVE';
       return {
@@ -132,21 +142,21 @@ export class ProcessInboundMessageUseCase {
       };
     }
 
-    // 2. Construir prompt con los 4 Brochures MCP de Clear Minds
     const tenantConfig = await this.crmService.getTenantConfig('clearminds');
     const allBrochuresContext = CLEARMINDS_MCP_RESOURCES.map(
-      (r) => `### [${r.productKey}] ${r.name}\nCampos requeridos: ${r.requiredFields.join(', ')}\n${r.content}`,
+      (r: McpResourceDefinition) =>
+        `### [${r.productKey}] ${r.name}\nCampos requeridos: ${r.requiredFields.join(', ')}\n${r.content}`,
     ).join('\n\n');
 
     const activeResource =
-      CLEARMINDS_MCP_RESOURCES.find((r) => r.productKey === session.activeProductKey) ??
-      CLEARMINDS_MCP_RESOURCES[0];
+      CLEARMINDS_MCP_RESOURCES.find(
+        (r: McpResourceDefinition) => r.productKey === session.activeProductKey,
+      ) ?? CLEARMINDS_MCP_RESOURCES[0];
 
     const systemPrompt =
       params.customSystemPrompt?.trim() ||
       `Eres ${tenantConfig.tenant.agentName}, ${tenantConfig.tenant.agentRole} de ${tenantConfig.tenant.name}.\nTONO: ${tenantConfig.tenant.tone}\nREGLAS GLOBALES:\n${tenantConfig.tenant.globalRules}\n\nCATÁLOGO OFICIAL MCP DE CLEAR MINDS (4 LÍNEAS DE NEGOCIO):\n${allBrochuresContext}`;
 
-    // 3. Llamar al LLM Gateway (Gemini o OpenAI)
     const recentHistory = session.history
       .slice(-8, -1)
       .map((h) => ({
@@ -166,13 +176,11 @@ export class ProcessInboundMessageUseCase {
       userMessage: params.message,
     });
 
-    // 4. Enrutamiento Dinámico Multi-Servicio
     const previousProductKey = session.activeProductKey;
     const productSwitched = llmOutput.detectedProductKey !== previousProductKey;
     session.activeProductKey = llmOutput.detectedProductKey;
     session.extractedFields = llmOutput.extractedFields;
 
-    // 5. Ejecutar herramientas MCP solicitadas por el modelo + sincronización automática en CRM
     const mcpExecutions: McpToolExecutionResult[] = [];
 
     for (const toolCall of llmOutput.mcpToolCalls) {
@@ -188,7 +196,6 @@ export class ProcessInboundMessageUseCase {
       }
     }
 
-    // Siempre sincronizar el estado de extracción del lead con la tool MCP registrar_lead_crm
     const capturedMap: Record<string, string> = {};
     for (const item of llmOutput.extractedFields) {
       if (item.status !== 'missing' && item.value && item.value !== 'Pendiente') {
@@ -206,7 +213,6 @@ export class ProcessInboundMessageUseCase {
       mcpExecutions.push(crmSync);
     }
 
-    // Guardar respuesta del asistente en el historial
     session.history.push({
       role: 'assistant',
       content: llmOutput.replyText,
@@ -214,7 +220,6 @@ export class ProcessInboundMessageUseCase {
     });
     session.messagesCount += 1;
 
-    // 6. Compresión de Memoria Incremental cada N mensajes
     const summaryInterval = tenantConfig.tenant.summaryInterval || 5;
     let summaryUpdated = false;
     if (session.messagesCount >= summaryInterval && session.messagesCount % summaryInterval <= 1) {

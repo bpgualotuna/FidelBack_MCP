@@ -1,10 +1,10 @@
 import { Inject, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { randomBytes, createHash } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { PrismaService } from '../../../../context/database/prisma.service';
 import { EnvironmentVariables } from '../../../../context/config/app.config';
-import { parseDurationToMs } from '../../../../common/utils/duration.util';
+import { durationToMs } from '../../../../common/utils/duration.util';
 import { HASHER_PORT, HasherPort } from '../../domain/interfaces/hasher.port';
 
 export interface AuthTokenResult {
@@ -16,12 +16,24 @@ export interface AuthTokenResult {
     email: string;
     fullName: string;
     role: string;
-    tenantId?: string | null;
   };
+}
+
+interface StoredRefreshSession {
+  userId: string;
+  email: string;
+  fullName: string;
+  role: string;
+  tokenHash: string;
+  isRevoked: boolean;
+  expiresAt: number;
 }
 
 @Injectable()
 export class TokenIssuerService {
+  // Store refresh token hashes in memory for fast rotation & reuse detection
+  private readonly refreshStore = new Map<string, StoredRefreshSession>();
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
@@ -36,10 +48,11 @@ export class TokenIssuerService {
   async login(
     email: string,
     password: string,
-    meta?: { ipAddress?: string; userAgent?: string },
+    _meta?: { ipAddress?: string; userAgent?: string },
   ): Promise<AuthTokenResult> {
+    const normalizedEmail = email.toLowerCase().trim();
     const user = await this.prisma.user.findUnique({
-      where: { email: email.toLowerCase().trim() },
+      where: { email: normalizedEmail },
     });
 
     if (!user || !user.isActive) {
@@ -51,48 +64,44 @@ export class TokenIssuerService {
       throw new UnauthorizedException('Credenciales inválidas.');
     }
 
-    return this.issueTokensForUser(user, meta);
+    return this.issueTokensForUser(user);
   }
 
-  async issueTokensForUser(
-    user: {
-      id: string;
-      email: string;
-      fullName: string;
-      role: string;
-      tenantId?: string | null;
-    },
-    meta?: { ipAddress?: string; userAgent?: string },
-  ): Promise<AuthTokenResult> {
-    const accessSecret = this.configService.get('JWT_ACCESS_SECRET', { infer: true });
-    const accessExpiration = this.configService.get('JWT_ACCESS_EXPIRATION', { infer: true });
-    const refreshExpiration = this.configService.get('JWT_REFRESH_EXPIRATION', { infer: true });
-    const refreshMaxAgeMs = parseDurationToMs(refreshExpiration);
+  async issueTokensForUser(user: {
+    id: string;
+    email: string;
+    fullName: string;
+    role: string;
+  }): Promise<AuthTokenResult> {
+    const jwtSecret = this.configService.get('JWT_SECRET', { infer: true });
+    const accessExpiration = this.configService.get('JWT_EXPIRES_IN', { infer: true });
+    const refreshExpiration = this.configService.get('JWT_REFRESH_EXPIRES_IN', { infer: true });
+    const refreshMaxAgeMs = durationToMs(refreshExpiration);
 
     const accessToken = await this.jwtService.signAsync(
       {
         sub: user.id,
         email: user.email,
         role: user.role,
-        tenantId: user.tenantId ?? undefined,
+        typ: 'access',
       },
       {
-        secret: accessSecret,
-        expiresIn: Math.floor(parseDurationToMs(accessExpiration) / 1000),
+        secret: jwtSecret,
+        expiresIn: Math.floor(durationToMs(accessExpiration) / 1000),
       },
     );
 
     const rawRefreshToken = randomBytes(48).toString('hex');
     const tokenHash = this.hashTokenSha256(rawRefreshToken);
 
-    await this.prisma.refreshToken.create({
-      data: {
-        userId: user.id,
-        tokenHash,
-        ipAddress: meta?.ipAddress,
-        userAgent: meta?.userAgent,
-        expiresAt: new Date(Date.now() + refreshMaxAgeMs),
-      },
+    this.refreshStore.set(tokenHash, {
+      userId: user.id,
+      email: user.email,
+      fullName: user.fullName,
+      role: user.role,
+      tokenHash,
+      isRevoked: false,
+      expiresAt: Date.now() + refreshMaxAgeMs,
     });
 
     return {
@@ -104,52 +113,50 @@ export class TokenIssuerService {
         email: user.email,
         fullName: user.fullName,
         role: user.role,
-        tenantId: user.tenantId,
       },
     };
   }
 
   async rotateRefreshToken(
     rawRefreshToken: string,
-    meta?: { ipAddress?: string; userAgent?: string },
+    _meta?: { ipAddress?: string; userAgent?: string },
   ): Promise<AuthTokenResult> {
     const tokenHash = this.hashTokenSha256(rawRefreshToken);
-    const existing = await this.prisma.refreshToken.findUnique({
-      where: { tokenHash },
-      include: { user: true },
-    });
+    const existing = this.refreshStore.get(tokenHash);
 
     if (!existing) {
       throw new UnauthorizedException('Refresh token inválido.');
     }
 
     if (existing.isRevoked) {
-      // Reuse detection: revoke all active tokens for user
-      await this.prisma.refreshToken.updateMany({
-        where: { userId: existing.userId, isRevoked: false },
-        data: { isRevoked: true },
-      });
+      for (const session of this.refreshStore.values()) {
+        if (session.userId === existing.userId) {
+          session.isRevoked = true;
+        }
+      }
       throw new UnauthorizedException('Reutilización de token detectada. Sesiones revocadas.');
     }
 
-    if (existing.expiresAt.getTime() < Date.now()) {
+    if (existing.expiresAt < Date.now()) {
       throw new UnauthorizedException('Refresh token expirado.');
     }
 
-    await this.prisma.refreshToken.update({
-      where: { id: existing.id },
-      data: { isRevoked: true },
-    });
+    existing.isRevoked = true;
 
-    return this.issueTokensForUser(existing.user, meta);
+    return this.issueTokensForUser({
+      id: existing.userId,
+      email: existing.email,
+      fullName: existing.fullName,
+      role: existing.role,
+    });
   }
 
   async revokeRefreshToken(rawRefreshToken?: string): Promise<void> {
     if (!rawRefreshToken) return;
     const tokenHash = this.hashTokenSha256(rawRefreshToken);
-    await this.prisma.refreshToken.updateMany({
-      where: { tokenHash, isRevoked: false },
-      data: { isRevoked: true },
-    });
+    const existing = this.refreshStore.get(tokenHash);
+    if (existing) {
+      existing.isRevoked = true;
+    }
   }
 }

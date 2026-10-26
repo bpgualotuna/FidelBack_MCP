@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../context/database/prisma.service';
-import { CLEARMINDS_MCP_RESOURCES } from '../../mcp/infrastructure/resources/clearminds-catalog.resource';
+import { CLEARMINDS_MCP_RESOURCES } from '../../../mcp/infrastructure/resources/clearminds-catalog.resource';
+import { McpResourceDefinition } from '../../../mcp/domain/interfaces/mcp-tool.port';
 import { TenantProfileEntity } from '../../domain/entities/tenant-profile.entity';
 
 @Injectable()
@@ -25,7 +26,7 @@ export class CrmService {
     try {
       const tenant = await this.prisma.tenant.findUnique({
         where: { slug },
-        include: { productLines: { where: { isActive: true } } },
+        include: { productLines: true },
       });
 
       if (tenant) {
@@ -34,11 +35,11 @@ export class CrmService {
             id: tenant.id,
             slug: tenant.slug,
             name: tenant.name,
-            agentName: tenant.agentName,
-            agentRole: tenant.agentRole,
-            tone: tenant.tone,
-            globalRules: tenant.globalRules,
-            summaryInterval: tenant.summaryInterval,
+            agentName: this.fallbackTenant.agentName,
+            agentRole: this.fallbackTenant.agentRole,
+            tone: this.fallbackTenant.tone,
+            globalRules: tenant.generalPolicy,
+            summaryInterval: tenant.memoryThreshold,
           },
           productLines: tenant.productLines,
           persistenceMode: 'POSTGRES_PRISMA',
@@ -50,7 +51,7 @@ export class CrmService {
 
     return {
       tenant: this.fallbackTenant,
-      productLines: CLEARMINDS_MCP_RESOURCES.map((r) => ({
+      productLines: CLEARMINDS_MCP_RESOURCES.map((r: McpResourceDefinition) => ({
         key: r.productKey,
         title: r.name,
         brochureContext: r.content,
@@ -74,14 +75,20 @@ export class CrmService {
         where: { slug },
         data: {
           name: payload.name,
-          agentName: payload.agentName,
-          agentRole: payload.agentRole,
-          tone: payload.tone,
-          globalRules: payload.globalRules,
-          summaryInterval: payload.summaryInterval,
+          generalPolicy: payload.globalRules,
+          memoryThreshold: payload.summaryInterval,
         },
       });
-      return { tenant: updated, persistenceMode: 'POSTGRES_PRISMA' };
+      return {
+        tenant: {
+          ...this.fallbackTenant,
+          id: updated.id,
+          name: updated.name,
+          globalRules: updated.generalPolicy,
+          summaryInterval: updated.memoryThreshold,
+        },
+        persistenceMode: 'POSTGRES_PRISMA',
+      };
     } catch {
       return { tenant: this.fallbackTenant, persistenceMode: 'IN_MEMORY_FALLBACK' };
     }

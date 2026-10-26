@@ -3,14 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { EnvironmentVariables } from '../../../../context/config/app.config';
-import { AuthenticatedUser } from '../../../../common/decorators/current-user.decorator';
-
-export interface JwtPayload {
-  sub: string;
-  email: string;
-  role: string;
-  tenantId?: string;
-}
+import { AuthPayload } from '../../../../common/decorators/current-user.decorator';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
@@ -18,16 +11,16 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: configService.get('JWT_ACCESS_SECRET', { infer: true }),
+      secretOrKey: configService.get('JWT_SECRET', { infer: true }),
     });
   }
 
-  validate(payload: JwtPayload): AuthenticatedUser {
+  validate(payload: AuthPayload): AuthPayload {
     return {
-      userId: payload.sub,
+      sub: payload.sub,
       email: payload.email,
       role: payload.role,
-      tenantId: payload.tenantId,
+      typ: payload.typ ?? 'access',
     };
   }
 }
