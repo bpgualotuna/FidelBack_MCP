@@ -1,0 +1,116 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  fullName     String
+  role         String   @default("ADVISOR") // ADMIN, ADVISOR
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Tenant {
+  id             String         @id @default(uuid())
+  slug           String         @unique
+  name           String
+  generalPolicy  String         @db.Text
+  memoryThreshold Int           @default(5)
+  isActive       Boolean        @default(true)
+  productLines   ProductLine[]
+  conversations  Conversation[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+}
+
+model ProductLine {
+  id                 String         @id
+  tenantId           String
+  tenant             Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name               String
+  tagline            String
+  badge              String
+  ragStoreId         String
+  systemInstructions String         @db.Text
+  keyFieldsJson      String         @db.Text // JSON array of { key, label, placeholder }
+  suggestedPrompts   String         @db.Text // JSON array of strings
+  conversations      Conversation[]
+  leads              Lead[]
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+}
+
+model Conversation {
+  id            String        @id @default(uuid())
+  tenantId      String
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  productLineId String?
+  productLine   ProductLine?  @relation(fields: [productLineId], references: [id])
+  sessionId     String        @unique
+  channelType   String        @default("WEB_CHAT") // WEB_CHAT, WHATSAPP
+  controlState  String        @default("AI_ACTIVE") // AI_ACTIVE, HUMAN_ACTIVE, PENDING_HANDOFF
+  customerId    String?
+  messages      Message[]
+  summaries     Summary[]
+  lead          Lead?
+  appointments  Appointment[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+}
+
+model Message {
+  id              String       @id @default(uuid())
+  conversationId  String
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  clientMessageId String?      @unique
+  senderType      String       // CUSTOMER, AI, HUMAN, SYSTEM
+  content         String       @db.Text
+  summarized      Boolean      @default(false)
+  toolCallJson    String?      @db.Text
+  extractionJson  String?      @db.Text
+  createdAt       DateTime     @default(now())
+}
+
+model Summary {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  lastMessageId  String?
+  content        String       @db.Text
+  createdAt      DateTime     @default(now())
+}
+
+model Lead {
+  id                String       @id @default(uuid())
+  conversationId    String       @unique
+  conversation      Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  productLineId     String?
+  productLine       ProductLine? @relation(fields: [productLineId], references: [id])
+  purchaseIntent    String       @default("sin_datos") // alta, media, baja, sin_datos
+  objection         String       @default("ninguna")
+  suggestedAction   String       @default("continuar_cualificacion")
+  extractedDataJson String       @default("{}") @db.Text
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+}
+
+model Appointment {
+  id             String       @id @default(uuid())
+  conversationId String?
+  conversation   Conversation? @relation(fields: [conversationId], references: [id])
+  appointmentCode String      @unique
+  contactName    String
+  contactEmail   String?
+  productName    String
+  scheduledDate  String
+  scheduledTime  String
+  status         String       @default("CONFIRMED")
+  createdAt      DateTime     @default(now())
+}
