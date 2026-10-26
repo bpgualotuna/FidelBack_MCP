@@ -9,13 +9,21 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
 
   constructor(configService: ConfigService) {
     const connectionString = configService.getOrThrow<string>('DATABASE_URL');
-    const adapter = new PrismaPg({ connectionString });
+    const adapter = new PrismaPg({
+      connectionString,
+      connectionTimeoutMillis: 1500,
+    });
     super({ adapter });
   }
 
   async onModuleInit() {
     try {
-      await this.$connect();
+      await Promise.race([
+        this.$connect(),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Timeout de conexión TCP a PostgreSQL (1.5s)')), 1500),
+        ),
+      ]);
       this.logger.log('✅ Conectado a PostgreSQL mediante Prisma 7 Adapter (@prisma/adapter-pg).');
     } catch (error) {
       this.logger.warn(
