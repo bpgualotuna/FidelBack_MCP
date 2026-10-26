@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
-import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Body, Controller, Get, Headers, Param, Patch, Post } from '@nestjs/common';
+import { ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../../../../common/decorators/public.decorator';
 import { ProcessInboundMessageUseCase } from '../../application/use-cases/process-inbound-message.use-case';
 import { LlmGatewayAdapter } from '../../infrastructure/adapters/llm-gateway.adapter';
@@ -9,7 +9,7 @@ import {
   UpdateSessionStatusDto,
 } from '../dtos/send-message.dto';
 
-@ApiTags('Chat Orchestrator & Handoff')
+@ApiTags('Chat Orchestrator & Multi-Tenant Webhook')
 @Controller('chat')
 export class ChatController {
   constructor(
@@ -26,12 +26,27 @@ export class ChatController {
 
   @Public()
   @Post('send')
+  @ApiHeader({
+    name: 'x-tenant-key',
+    required: false,
+    description: 'API Key exclusiva de la empresa (ej. fidel_live_clearminds_2026) para bots de WhatsApp o CRMs',
+  })
   @ApiOperation({
     summary:
-      'Procesar turno conversacional con enrutamiento multi-servicio, extracción comercial y ejecución de Tools MCP',
+      'Procesar turno conversacional Multi-Empresa con enrutamiento dinámico, extracción comercial y ejecución de Tools MCP',
   })
-  async sendMessage(@Body() dto: SendMessageDto) {
-    return this.processInboundMessage.execute(dto);
+  async sendMessage(
+    @Body() dto: SendMessageDto,
+    @Headers('x-tenant-key') tenantApiKey?: string,
+    @Headers('x-tenant-id') tenantHeaderSlug?: string,
+  ) {
+    return this.processInboundMessage.execute({
+      ...dto,
+      provider: dto.provider || 'gemini',
+      model: dto.model || 'gemini-flash-lite-latest',
+      tenantApiKey,
+      tenantSlug: dto.tenantSlug || tenantHeaderSlug,
+    });
   }
 
   @Public()

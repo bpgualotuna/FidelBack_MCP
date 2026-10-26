@@ -15,17 +15,26 @@ export class SendMessageDto {
   @IsNotEmpty()
   message!: string;
 
-  @ApiProperty({ enum: ['gemini', 'openai'], example: 'gemini' })
-  @IsIn(['gemini', 'openai'])
-  provider!: 'gemini' | 'openai';
-
-  @ApiProperty({ example: 'gemini-flash-lite-latest' })
+  @ApiPropertyOptional({
+    example: 'clearminds',
+    description: 'Slug de la empresa (Tenant). También se resuelve automáticamente si envías el header x-tenant-key.',
+  })
   @IsString()
-  @IsNotEmpty()
-  model!: string;
+  @IsOptional()
+  tenantSlug?: string;
+
+  @ApiPropertyOptional({ enum: ['gemini', 'openai'], default: 'gemini' })
+  @IsIn(['gemini', 'openai'])
+  @IsOptional()
+  provider?: 'gemini' | 'openai';
+
+  @ApiPropertyOptional({ default: 'gemini-flash-lite-latest' })
+  @IsString()
+  @IsOptional()
+  model?: string;
 
   @ApiPropertyOptional({
-    description: 'API Key opcional (si se omite, el backend utiliza GEMINI_API_KEY u OPENAI_API_KEY de su .env)',
+    description: 'API Key opcional de LLM (por defecto usa la GEMINI_API_KEY protegida en el servidor)',
   })
   @IsString()
   @IsOptional()

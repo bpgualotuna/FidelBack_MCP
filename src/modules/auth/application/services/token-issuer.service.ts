@@ -16,6 +16,7 @@ export interface AuthTokenResult {
     email: string;
     fullName: string;
     role: string;
+    tenantSlug: string;
   };
 }
 
@@ -24,6 +25,7 @@ interface StoredRefreshSession {
   email: string;
   fullName: string;
   role: string;
+  tenantSlug: string;
   tokenHash: string;
   isRevoked: boolean;
   expiresAt: number;
@@ -31,7 +33,6 @@ interface StoredRefreshSession {
 
 @Injectable()
 export class TokenIssuerService {
-  // Store refresh token hashes in memory for fast rotation & reuse detection
   private readonly refreshStore = new Map<string, StoredRefreshSession>();
 
   constructor(
@@ -64,7 +65,13 @@ export class TokenIssuerService {
       throw new UnauthorizedException('Credenciales inválidas.');
     }
 
-    return this.issueTokensForUser(user);
+    return this.issueTokensForUser({
+      id: user.id,
+      email: user.email,
+      fullName: user.fullName,
+      role: user.role,
+      tenantSlug: user.tenantSlug || 'clearminds',
+    });
   }
 
   async issueTokensForUser(user: {
@@ -72,6 +79,7 @@ export class TokenIssuerService {
     email: string;
     fullName: string;
     role: string;
+    tenantSlug: string;
   }): Promise<AuthTokenResult> {
     const jwtSecret = this.configService.get('JWT_SECRET', { infer: true });
     const accessExpiration = this.configService.get('JWT_EXPIRES_IN', { infer: true });
@@ -83,6 +91,7 @@ export class TokenIssuerService {
         sub: user.id,
         email: user.email,
         role: user.role,
+        tenantSlug: user.tenantSlug,
         typ: 'access',
       },
       {
@@ -99,6 +108,7 @@ export class TokenIssuerService {
       email: user.email,
       fullName: user.fullName,
       role: user.role,
+      tenantSlug: user.tenantSlug,
       tokenHash,
       isRevoked: false,
       expiresAt: Date.now() + refreshMaxAgeMs,
@@ -113,6 +123,7 @@ export class TokenIssuerService {
         email: user.email,
         fullName: user.fullName,
         role: user.role,
+        tenantSlug: user.tenantSlug,
       },
     };
   }
@@ -148,6 +159,7 @@ export class TokenIssuerService {
       email: existing.email,
       fullName: existing.fullName,
       role: existing.role,
+      tenantSlug: existing.tenantSlug,
     });
   }
 

@@ -15,6 +15,7 @@ import {
 
 export interface InMemorySessionState {
   sessionId: string;
+  tenantSlug: string;
   status: 'AI_ACTIVE' | 'HUMAN_ACTIVE' | 'CLOSED';
   activeProductKey: ProductLineKey;
   incrementalSummary: string;
@@ -42,9 +43,13 @@ export class ProcessInboundMessageUseCase {
   getOrCreateMemorySession(
     sessionId: string,
     initialProductKey: ProductLineKey = 'ia_docencia',
+    tenantSlug = 'clearminds',
   ): InMemorySessionState {
     const existing = this.sessions.get(sessionId);
-    if (existing) return existing;
+    if (existing) {
+      existing.tenantSlug = tenantSlug || existing.tenantSlug;
+      return existing;
+    }
 
     const resource =
       CLEARMINDS_MCP_RESOURCES.find(
@@ -53,6 +58,7 @@ export class ProcessInboundMessageUseCase {
 
     const created: InMemorySessionState = {
       sessionId,
+      tenantSlug,
       status: 'AI_ACTIVE',
       activeProductKey: initialProductKey,
       incrementalSummary: '',
@@ -104,13 +110,22 @@ export class ProcessInboundMessageUseCase {
     provider: 'gemini' | 'openai';
     model: string;
     apiKey?: string;
+    tenantApiKey?: string;
+    tenantSlug?: string;
     activeProductKey?: ProductLineKey;
     senderRole?: 'user' | 'human_agent';
     customSystemPrompt?: string;
   }) {
+    // 0. Resolver empresa (Tenant) por x-tenant-key o tenantSlug
+    const resolvedTenantSlug = await this.crmService.resolveTenantSlug(
+      params.tenantApiKey,
+      params.tenantSlug,
+    );
+
     const session = this.getOrCreateMemorySession(
       params.sessionId,
       params.activeProductKey || 'ia_docencia',
+      resolvedTenantSlug,
     );
 
     if (params.activeProductKey && params.activeProductKey !== session.activeProductKey) {
@@ -129,6 +144,7 @@ export class ProcessInboundMessageUseCase {
       session.status = 'HUMAN_ACTIVE';
       return {
         sessionId: session.sessionId,
+        tenantSlug: resolvedTenantSlug,
         status: session.status,
         ignoredByAi: true,
         replyText: null,
@@ -142,7 +158,7 @@ export class ProcessInboundMessageUseCase {
       };
     }
 
-    const tenantConfig = await this.crmService.getTenantConfig('clearminds');
+    const tenantConfig = await this.crmService.getTenantConfig(resolvedTenantSlug);
     const allBrochuresContext = CLEARMINDS_MCP_RESOURCES.map(
       (r: McpResourceDefinition) =>
         `### [${r.productKey}] ${r.name}\nCampos requeridos: ${r.requiredFields.join(', ')}\n${r.content}`,
@@ -155,7 +171,7 @@ export class ProcessInboundMessageUseCase {
 
     const systemPrompt =
       params.customSystemPrompt?.trim() ||
-      `Eres ${tenantConfig.tenant.agentName}, ${tenantConfig.tenant.agentRole} de ${tenantConfig.tenant.name}.\nTONO: ${tenantConfig.tenant.tone}\nREGLAS GLOBALES:\n${tenantConfig.tenant.globalRules}\n\nCATÁLOGO OFICIAL MCP DE CLEAR MINDS (4 LÍNEAS DE NEGOCIO):\n${allBrochuresContext}`;
+      `Eres ${tenantConfig.tenant.agentName}, ${tenantConfig.tenant.agentRole} de la empresa "${tenantConfig.tenant.name}" (tenant: ${resolvedTenantSlug}).\nTONO: ${tenantConfig.tenant.tone}\nPOLÍTICA Y REGLAS DE LA EMPRESA:\n${tenantConfig.tenant.globalRules}\n\nCATÁLOGO OFICIAL MCP:\n${allBrochuresContext}`;
 
     const recentHistory = session.history
       .slice(-8, -1)
@@ -220,6 +236,20 @@ export class ProcessInboundMessageUseCase {
     });
     session.messagesCount += 1;
 
+    // Persistir conversación y mensajes en Supabase de manera asíncrona sin bloquear
+    void this.persistTurnInSupabase({
+      sessionId: session.sessionId,
+      tenantId: tenantConfig.tenant.id,
+      productKey: session.activeProductKey,
+      controlState: session.status,
+      userMessage: params.message,
+      aiReply: llmOutput.replyText,
+      intentLevel: llmOutput.intentLevel,
+      nextAction: llmOutput.nextAction,
+      extractedFields: session.extractedFields,
+      mcpExecutions,
+    });
+
     const summaryInterval = tenantConfig.tenant.summaryInterval || 5;
     let summaryUpdated = false;
     if (session.messagesCount >= summaryInterval && session.messagesCount % summaryInterval <= 1) {
@@ -235,6 +265,8 @@ export class ProcessInboundMessageUseCase {
 
     return {
       sessionId: session.sessionId,
+      tenantSlug: resolvedTenantSlug,
+      tenantName: tenantConfig.tenant.name,
       status: session.status,
       replyText: llmOutput.replyText,
       detectedProductKey: session.activeProductKey,
@@ -255,5 +287,75 @@ export class ProcessInboundMessageUseCase {
         latencyMs: llmOutput.latencyMs,
       },
     };
+  }
+
+  private async persistTurnInSupabase(data: {
+    sessionId: string;
+    tenantId: string;
+    productKey: string;
+    controlState: string;
+    userMessage: string;
+    aiReply: string;
+    intentLevel: string;
+    nextAction: string;
+    extractedFields: StructuredExtractionItem[];
+    mcpExecutions: McpToolExecutionResult[];
+  }): Promise<void> {
+    try {
+      const validProductLine = await this.prisma.productLine.findUnique({
+        where: { id: data.productKey },
+      });
+
+      const conversation = await this.prisma.conversation.upsert({
+        where: { sessionId: data.sessionId },
+        update: {
+          productLineId: validProductLine ? data.productKey : null,
+          controlState: data.controlState,
+        },
+        create: {
+          sessionId: data.sessionId,
+          tenantId: data.tenantId,
+          productLineId: validProductLine ? data.productKey : null,
+          controlState: data.controlState,
+        },
+      });
+
+      await this.prisma.message.createMany({
+        data: [
+          {
+            conversationId: conversation.id,
+            senderType: 'CUSTOMER',
+            content: data.userMessage,
+          },
+          {
+            conversationId: conversation.id,
+            senderType: 'AI',
+            content: data.aiReply,
+            extractionJson: JSON.stringify(data.extractedFields),
+            toolCallJson:
+              data.mcpExecutions.length > 0 ? JSON.stringify(data.mcpExecutions) : null,
+          },
+        ],
+      });
+
+      await this.prisma.lead.upsert({
+        where: { conversationId: conversation.id },
+        update: {
+          productLineId: validProductLine ? data.productKey : null,
+          purchaseIntent: data.intentLevel.toLowerCase(),
+          suggestedAction: data.nextAction,
+          extractedDataJson: JSON.stringify(data.extractedFields),
+        },
+        create: {
+          conversationId: conversation.id,
+          productLineId: validProductLine ? data.productKey : null,
+          purchaseIntent: data.intentLevel.toLowerCase(),
+          suggestedAction: data.nextAction,
+          extractedDataJson: JSON.stringify(data.extractedFields),
+        },
+      });
+    } catch (err) {
+      this.logger.debug(`Error no bloqueante al persistir turno en Supabase: ${(err as Error).message}`);
+    }
   }
 }

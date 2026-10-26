@@ -12,22 +12,24 @@ model User {
   passwordHash String
   fullName     String
   role         String   @default("ADVISOR") // ADMIN, ADVISOR
+  tenantSlug   String   @default("clearminds")
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 }
 
 model Tenant {
-  id             String         @id @default(uuid())
-  slug           String         @unique
-  name           String
-  generalPolicy  String         @db.Text
-  memoryThreshold Int           @default(5)
-  isActive       Boolean        @default(true)
-  productLines   ProductLine[]
-  conversations  Conversation[]
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  id              String         @id @default(uuid())
+  slug            String         @unique
+  name            String
+  apiKey          String?        @unique
+  generalPolicy   String         @db.Text
+  memoryThreshold Int            @default(5)
+  isActive        Boolean        @default(true)
+  productLines    ProductLine[]
+  conversations   Conversation[]
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
 }
 
 model ProductLine {
@@ -102,15 +104,15 @@ model Lead {
 }
 
 model Appointment {
-  id             String       @id @default(uuid())
-  conversationId String?
-  conversation   Conversation? @relation(fields: [conversationId], references: [id])
-  appointmentCode String      @unique
-  contactName    String
-  contactEmail   String?
-  productName    String
-  scheduledDate  String
-  scheduledTime  String
-  status         String       @default("CONFIRMED")
-  createdAt      DateTime     @default(now())
+  id              String        @id @default(uuid())
+  conversationId  String?
+  conversation    Conversation? @relation(fields: [conversationId], references: [id])
+  appointmentCode String        @unique
+  contactName     String
+  contactEmail    String?
+  productName     String
+  scheduledDate   String
+  scheduledTime   String
+  status          String        @default("CONFIRMED")
+  createdAt       DateTime      @default(now())
 }

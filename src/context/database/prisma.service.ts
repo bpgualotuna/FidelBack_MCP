@@ -11,7 +11,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     const connectionString = configService.getOrThrow<string>('DATABASE_URL');
     const adapter = new PrismaPg({
       connectionString,
-      connectionTimeoutMillis: 1500,
+      connectionTimeoutMillis: 8000,
     });
     super({ adapter });
   }
@@ -21,13 +21,13 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
       await Promise.race([
         this.$connect(),
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Timeout de conexión TCP a PostgreSQL (1.5s)')), 1500),
+          setTimeout(() => reject(new Error('Timeout de conexión TCP a PostgreSQL (8s)')), 8000),
         ),
       ]);
-      this.logger.log('✅ Conectado a PostgreSQL mediante Prisma 7 Adapter (@prisma/adapter-pg).');
+      this.logger.log('✅ Conectado a Supabase PostgreSQL mediante Prisma 7 Adapter (@prisma/adapter-pg).');
     } catch (error) {
       this.logger.warn(
-        `⚠️ PostgreSQL no disponible aún (${(error as Error).message}). FidelBack_MCP operará en modo memoria hasta levantar Docker.`,
+        `⚠️ PostgreSQL no disponible (${(error as Error).message}). FidelBack_MCP operará en modo memoria de respaldo.`,
       );
     }
   }
