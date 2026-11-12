@@ -223,4 +223,83 @@ export class CrmService {
       return { appointments: [], persistenceMode: 'IN_MEMORY_FALLBACK' };
     }
   }
+
+  async listTrainingRules(tenantSlug = 'clearminds') {
+    const tenant = await this.prisma.tenant.findUnique({ where: { slug: tenantSlug } });
+    if (!tenant) return { rules: [] };
+    const rules = await this.prisma.trainingRule.findMany({
+      where: { tenantId: tenant.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    return { rules };
+  }
+
+  async createTrainingRule(
+    tenantSlug = 'clearminds',
+    params: {
+      instruction: string;
+      category?: string;
+      sourceFeedback?: string;
+      createdByName?: string;
+    },
+  ) {
+    const tenant = await this.prisma.tenant.findUnique({ where: { slug: tenantSlug } });
+    if (!tenant) {
+      throw new UnauthorizedException(`Tenant no encontrado: ${tenantSlug}`);
+    }
+    const rule = await this.prisma.trainingRule.create({
+      data: {
+        tenantId: tenant.id,
+        instruction: params.instruction.trim(),
+        category: (params.category || 'GENERAL').toUpperCase(),
+        sourceFeedback: params.sourceFeedback?.trim() || null,
+        createdByName: params.createdByName?.trim() || 'Entrenador',
+        isActive: true,
+      },
+    });
+    return { rule };
+  }
+
+  async toggleTrainingRule(tenantSlug: string, ruleId: string, isActive: boolean) {
+    const tenant = await this.prisma.tenant.findUnique({ where: { slug: tenantSlug } });
+    if (!tenant) return { rules: [] };
+    await this.prisma.trainingRule.updateMany({
+      where: { id: ruleId, tenantId: tenant.id },
+      data: { isActive },
+    });
+    return this.listTrainingRules(tenantSlug);
+  }
+
+  async deleteTrainingRule(tenantSlug: string, ruleId: string) {
+    const tenant = await this.prisma.tenant.findUnique({ where: { slug: tenantSlug } });
+    if (!tenant) return { rules: [] };
+    await this.prisma.trainingRule.deleteMany({
+      where: { id: ruleId, tenantId: tenant.id },
+    });
+    return this.listTrainingRules(tenantSlug);
+  }
+
+  async getActiveTrainingRulesBlock(tenantSlug = 'clearminds'): Promise<string> {
+    try {
+      const tenant = await this.prisma.tenant.findUnique({
+        where: { slug: tenantSlug },
+        select: { id: true },
+      });
+      if (!tenant) return '';
+
+      const activeRules = await this.prisma.trainingRule.findMany({
+        where: { tenantId: tenant.id, isActive: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (activeRules.length === 0) return '';
+
+      const list = activeRules
+        .map((r, idx) => `${idx + 1}. [${r.category}] ${r.instruction}`)
+        .join('\n');
+
+      return `\n---\nREGLAS Y CORRECCIONES APRENDIDAS EN ENTRENAMIENTO (PRIORIDAD MÁXIMA — DEBES CUMPLIRLAS OBLIGATORIAMENTE SOBRE CUALQUIER OTRA REGLA DE ESTILO O CONTENIDO):\n${list}\n---\n`;
+    } catch {
+      return '';
+    }
+  }
 }

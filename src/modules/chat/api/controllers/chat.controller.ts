@@ -1,11 +1,15 @@
-import { Body, Controller, Get, Headers, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Param, Patch, Post } from '@nestjs/common';
 import { ApiHeader, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Public } from '../../../../common/decorators/public.decorator';
+import { CrmService } from '../../../crm/application/services/crm.service';
 import { ProcessInboundMessageUseCase } from '../../application/use-cases/process-inbound-message.use-case';
 import { LlmGatewayAdapter } from '../../infrastructure/adapters/llm-gateway.adapter';
 import {
+  CreateTrainingRuleDto,
+  SandboxTrainingTurnDto,
   SendMessageDto,
   TestLlmConnectionDto,
+  ToggleTrainingRuleDto,
   UpdateSessionStatusDto,
 } from '../dtos/send-message.dto';
 
@@ -15,6 +19,7 @@ export class ChatController {
   constructor(
     private readonly processInboundMessage: ProcessInboundMessageUseCase,
     private readonly llmGateway: LlmGatewayAdapter,
+    private readonly crmService: CrmService,
   ) {}
 
   @Public()
@@ -64,5 +69,79 @@ export class ChatController {
     @Body() dto: UpdateSessionStatusDto,
   ) {
     return this.processInboundMessage.setSessionStatus(sessionId, dto.status);
+  }
+
+  @Public()
+  @Get('rules')
+  @ApiHeader({ name: 'x-tenant-key', required: false })
+  @ApiOperation({ summary: 'Listar reglas aprendidas en Modo Entrenamiento para el tenant' })
+  async listRules(
+    @Headers('x-tenant-key') tenantApiKey?: string,
+    @Headers('x-tenant-id') tenantHeaderSlug?: string,
+  ) {
+    const slug = await this.crmService.resolveTenantSlug(tenantApiKey, tenantHeaderSlug);
+    const { rules } = await this.crmService.listTrainingRules(slug);
+    return { ok: true, rules };
+  }
+
+  @Public()
+  @Post('rules')
+  @ApiHeader({ name: 'x-tenant-key', required: false })
+  @ApiOperation({ summary: 'Crear manualmente una regla de entrenamiento para el tenant' })
+  async createRule(
+    @Body() dto: CreateTrainingRuleDto,
+    @Headers('x-tenant-key') tenantApiKey?: string,
+    @Headers('x-tenant-id') tenantHeaderSlug?: string,
+  ) {
+    const slug = await this.crmService.resolveTenantSlug(tenantApiKey, tenantHeaderSlug);
+    const { rule } = await this.crmService.createTrainingRule(slug, dto);
+    return { ok: true, rule };
+  }
+
+  @Public()
+  @Patch('rules/:ruleId')
+  @ApiHeader({ name: 'x-tenant-key', required: false })
+  @ApiOperation({ summary: 'Activar o pausar una regla de entrenamiento' })
+  async toggleRule(
+    @Param('ruleId') ruleId: string,
+    @Body() dto: ToggleTrainingRuleDto,
+    @Headers('x-tenant-key') tenantApiKey?: string,
+    @Headers('x-tenant-id') tenantHeaderSlug?: string,
+  ) {
+    const slug = await this.crmService.resolveTenantSlug(tenantApiKey, tenantHeaderSlug);
+    const { rules } = await this.crmService.toggleTrainingRule(slug, ruleId, dto.isActive);
+    return { ok: true, rules };
+  }
+
+  @Public()
+  @Delete('rules/:ruleId')
+  @ApiHeader({ name: 'x-tenant-key', required: false })
+  @ApiOperation({ summary: 'Eliminar una regla de entrenamiento' })
+  async deleteRule(
+    @Param('ruleId') ruleId: string,
+    @Headers('x-tenant-key') tenantApiKey?: string,
+    @Headers('x-tenant-id') tenantHeaderSlug?: string,
+  ) {
+    const slug = await this.crmService.resolveTenantSlug(tenantApiKey, tenantHeaderSlug);
+    const { rules } = await this.crmService.deleteTrainingRule(slug, ruleId);
+    return { ok: true, rules };
+  }
+
+  @Public()
+  @Post('training-turn')
+  @ApiHeader({ name: 'x-tenant-key', required: false })
+  @ApiOperation({ summary: 'Ejecutar un turno de entrenamiento sandbox (Roleplay / Corrección)' })
+  async sandboxTrainingTurn(
+    @Body() dto: SandboxTrainingTurnDto,
+    @Headers('x-tenant-key') tenantApiKey?: string,
+    @Headers('x-tenant-id') tenantHeaderSlug?: string,
+  ) {
+    return this.processInboundMessage.runSandboxTrainingTurn({
+      tenantApiKey,
+      tenantSlug: tenantHeaderSlug,
+      message: dto.message,
+      history: dto.history,
+      trainerName: dto.trainerName,
+    });
   }
 }

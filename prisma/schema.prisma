@@ -28,8 +28,24 @@ model Tenant {
   isActive        Boolean        @default(true)
   productLines    ProductLine[]
   conversations   Conversation[]
+  trainingRules   TrainingRule[]
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
+}
+
+model TrainingRule {
+  id             String   @id @default(uuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  instruction    String   @db.Text
+  category       String   @default("GENERAL")
+  sourceFeedback String?  @db.Text
+  createdByName  String   @default("Entrenador")
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([tenantId])
 }
 
 model ProductLine {

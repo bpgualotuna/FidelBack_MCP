@@ -115,6 +115,8 @@ export class ProcessInboundMessageUseCase {
     activeProductKey?: ProductLineKey;
     senderRole?: 'user' | 'human_agent';
     customSystemPrompt?: string;
+    trainingMode?: boolean;
+    trainerName?: string;
   }) {
     // 0. Resolver empresa (Tenant) por x-tenant-key o tenantSlug
     const resolvedTenantSlug = await this.crmService.resolveTenantSlug(
@@ -181,9 +183,11 @@ export class ProcessInboundMessageUseCase {
         (r: McpResourceDefinition) => r.productKey === session.activeProductKey,
       ) ?? CLEARMINDS_MCP_RESOURCES[0];
 
+    const activeRulesBlock = await this.crmService.getActiveTrainingRulesBlock(resolvedTenantSlug);
+
     const systemPrompt =
       params.customSystemPrompt?.trim() ||
-      `Eres ${tenantConfig.tenant.agentName}, ${tenantConfig.tenant.agentRole} de la empresa "${tenantConfig.tenant.name}" (tenant: ${resolvedTenantSlug}).\nTONO: ${tenantConfig.tenant.tone}\nPOLÍTICA Y REGLAS DE LA EMPRESA:\n${tenantConfig.tenant.globalRules}\n\nCATÁLOGO / CONOCIMIENTO:\n${allBrochuresContext}`;
+      `Eres ${tenantConfig.tenant.agentName}, ${tenantConfig.tenant.agentRole} de la empresa "${tenantConfig.tenant.name}" (tenant: ${resolvedTenantSlug}).\nTONO: ${tenantConfig.tenant.tone}\nPOLÍTICA Y REGLAS DE LA EMPRESA:\n${tenantConfig.tenant.globalRules}\n\nCATÁLOGO / CONOCIMIENTO:\n${allBrochuresContext}${activeRulesBlock}`;
 
     const recentHistory = session.history
       .slice(-8, -1)
@@ -191,6 +195,56 @@ export class ProcessInboundMessageUseCase {
         role: (h.role === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
         content: h.content,
       }));
+
+    if (params.trainingMode) {
+      const trainingOut = await this.llmGateway.generateTrainingTurn({
+        provider: params.provider,
+        model: params.model,
+        apiKey: params.apiKey,
+        systemPrompt,
+        recentHistory,
+        userMessage: params.message,
+      });
+
+      let savedRule: Record<string, unknown> | null = null;
+      if (trainingOut.mode === 'CORRECTION' && trainingOut.learnedRule) {
+        try {
+          const created = await this.crmService.createTrainingRule(resolvedTenantSlug, {
+            instruction: trainingOut.learnedRule.instruction,
+            category: trainingOut.learnedRule.category,
+            sourceFeedback: params.message,
+            createdByName: params.trainerName || 'Entrenador',
+          });
+          savedRule = created.rule as unknown as Record<string, unknown>;
+        } catch (err) {
+          this.logger.warn(`No se pudo guardar regla aprendida: ${(err as Error).message}`);
+        }
+      }
+
+      session.history.push({
+        role: 'assistant',
+        content: trainingOut.reply,
+        createdAt: new Date().toISOString(),
+      });
+
+      return {
+        sessionId: session.sessionId,
+        tenantSlug: resolvedTenantSlug,
+        tenantName: tenantConfig.tenant.name,
+        status: session.status,
+        trainingMode: trainingOut.mode,
+        replyText: trainingOut.reply,
+        learnedRule: savedRule,
+        detectedProductKey: session.activeProductKey,
+        productSwitched: false,
+        intentLevel: 'MEDIO',
+        intentJustification: `Sesión en Modo Entrenamiento (${trainingOut.mode})`,
+        extractedFields: session.extractedFields,
+        nextAction: 'Continuar roleplay / entrenamiento',
+        incrementalSummary: session.incrementalSummary,
+        mcpExecutions: [],
+      };
+    }
 
     const llmOutput = await this.llmGateway.generateCommercialTurn({
       provider: params.provider,
@@ -369,5 +423,73 @@ export class ProcessInboundMessageUseCase {
     } catch (err) {
       this.logger.debug(`Error no bloqueante al persistir turno en Supabase: ${(err as Error).message}`);
     }
+  }
+
+  async runSandboxTrainingTurn(params: {
+    tenantApiKey?: string;
+    tenantSlug?: string;
+    message: string;
+    history?: Array<{ role: 'trainer' | 'fidel'; text: string }>;
+    trainerName?: string;
+  }) {
+    const resolvedTenantSlug = await this.crmService.resolveTenantSlug(
+      params.tenantApiKey,
+      params.tenantSlug,
+    );
+    const tenantConfig = await this.crmService.getTenantConfig(resolvedTenantSlug);
+    const isClearMinds = resolvedTenantSlug === 'clearminds';
+
+    const allBrochuresContext = isClearMinds
+      ? CLEARMINDS_MCP_RESOURCES.map(
+          (r: McpResourceDefinition) =>
+            `### [${r.productKey}] ${r.name}\nCampos requeridos: ${r.requiredFields.join(', ')}\n${r.content}`,
+        ).join('\n\n')
+      : tenantConfig.productLines && tenantConfig.productLines.length > 0
+        ? tenantConfig.productLines
+            .map((p: Record<string, unknown>) =>
+              'id' in p
+                ? `### [${String(p.id)}] ${String(p.name)}\n${String(p.systemInstructions)}`
+                : `### [${String(p.key)}] ${String(p.title)}\n${String(p.brochureContext)}`,
+            )
+            .join('\n\n')
+        : 'Usa estrictamente la información y datos contextuales proporcionados.';
+
+    const activeRulesBlock = await this.crmService.getActiveTrainingRulesBlock(resolvedTenantSlug);
+    const systemPrompt = `Eres ${tenantConfig.tenant.agentName}, ${tenantConfig.tenant.agentRole} de la empresa "${tenantConfig.tenant.name}" (tenant: ${resolvedTenantSlug}).\nTONO: ${tenantConfig.tenant.tone}\nPOLÍTICA Y REGLAS DE LA EMPRESA:\n${tenantConfig.tenant.globalRules}\n\nCATÁLOGO / CONOCIMIENTO:\n${allBrochuresContext}${activeRulesBlock}`;
+
+    const recentHistory = (params.history || []).slice(-12).map((h) => ({
+      role: (h.role === 'fidel' ? 'assistant' : 'user') as 'user' | 'assistant',
+      content: h.text,
+    }));
+
+    const out = await this.llmGateway.generateTrainingTurn({
+      provider: 'gemini',
+      model: 'gemini-flash-lite-latest',
+      systemPrompt,
+      recentHistory,
+      userMessage: params.message,
+    });
+
+    let savedRule: Record<string, unknown> | null = null;
+    if (out.mode === 'CORRECTION' && out.learnedRule) {
+      try {
+        const created = await this.crmService.createTrainingRule(resolvedTenantSlug, {
+          instruction: out.learnedRule.instruction,
+          category: out.learnedRule.category,
+          sourceFeedback: params.message,
+          createdByName: params.trainerName || 'Entrenador',
+        });
+        savedRule = created.rule as unknown as Record<string, unknown>;
+      } catch (err) {
+        this.logger.warn(`No se pudo guardar regla sandbox: ${(err as Error).message}`);
+      }
+    }
+
+    return {
+      ok: true,
+      text: out.reply,
+      mode: out.mode,
+      learnedRule: savedRule,
+    };
   }
 }

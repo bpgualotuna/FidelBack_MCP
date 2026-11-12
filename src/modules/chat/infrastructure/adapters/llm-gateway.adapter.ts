@@ -344,4 +344,150 @@ REGLAS MCP Y DE COMPORTAMIENTO:
       };
     }
   }
+
+  async generateTrainingTurn(input: {
+    provider: 'gemini' | 'openai';
+    model: string;
+    apiKey?: string;
+    systemPrompt: string;
+    recentHistory: Array<{ role: 'user' | 'assistant'; content: string }>;
+    userMessage: string;
+  }): Promise<{
+    reply: string;
+    mode: 'SETUP' | 'ROLEPLAY' | 'CORRECTION';
+    learnedRule: { instruction: string; category: string } | null;
+  }> {
+    const resolvedKey = this.resolveApiKey(input.provider, input.apiKey);
+
+    const trainingInstructions = `
+# MODO ENTRENAMIENTO INTERACTIVO — FIDEL (COACH COMERCIAL)
+Estás operando en **MODO ENTRENAMIENTO ACTIVO** conversando con un Entrenador (jefe de ventas o asesor) que practica contigo mediante roleplay y te da correcciones para mejorar.
+
+Clasifica el ÚLTIMO MENSAJE del Entrenador en uno de 3 escenarios:
+1. "SETUP": El usuario te avisa que va a empezar a entrenarte o pregunta si estás listo.
+   - mode: "SETUP", learnedRule: null, reply: Confirma brevemente que estás en Modo Entrenamiento y listo para practicar.
+2. "CORRECTION": El usuario sale del papel de cliente o usa frases como "Entrenador:", "Mejor di...", "Corrige...", "Menos emojis", "Ten en cuenta...", "Guarda en memoria..." para corregir tu respuesta, tono o enseñarte un dato nuevo.
+   - mode: "CORRECTION"
+   - learnedRule: { "instruction": "Directriz clara en imperativo para futuros clientes", "category": "ESTILO" | "COMERCIAL" | "OBJECIONES" | "GENERAL" }
+   - reply: En dos partes breves separadas por un salto de línea:
+     1) "✅ Anotado en memoria: [resumen breve]."
+     2) "Respuesta corregida: \"[nueva respuesta mejorada aplicando la regla]\""
+3. "ROLEPLAY": El usuario escribe actuando como un cliente real.
+   - mode: "ROLEPLAY", learnedRule: null, reply: Responde 100% en tu papel de Fidel aplicando tu conocimiento base y TODAS las reglas aprendidas previamente.
+
+Devuelve ÚNICAMENTE un JSON válido:
+{
+  "mode": "SETUP" | "ROLEPLAY" | "CORRECTION",
+  "learnedRule": { "instruction": "string", "category": "ESTILO" | "COMERCIAL" | "OBJECIONES" | "GENERAL" } | null,
+  "reply": "string con la respuesta exacta para el chat"
+}`;
+
+    const fullSystem = `${input.systemPrompt}\n\n${trainingInstructions}`;
+
+    if (input.provider === 'gemini') {
+      const cleanModel = (input.model || 'gemini-flash-lite-latest').replace(/^models\//, '');
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${encodeURIComponent(resolvedKey)}`;
+      const contents = [
+        ...input.recentHistory.map((m) => ({
+          role: m.role === 'assistant' ? 'model' : 'user',
+          parts: [{ text: m.content }],
+        })),
+        { role: 'user', parts: [{ text: input.userMessage }] },
+      ];
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: fullSystem }] },
+          contents,
+          generationConfig: { temperature: 0.35, responseMimeType: 'application/json' },
+        }),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new BadRequestException(`Error en Gemini Training (${res.status}): ${errText.slice(0, 200)}`);
+      }
+
+      const data = (await res.json()) as {
+        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+      };
+      const raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+      return this.parseTrainingJson(raw);
+    }
+
+    const cleanModel = input.model || 'gpt-4o-mini';
+    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${resolvedKey}`,
+      },
+      body: JSON.stringify({
+        model: cleanModel,
+        response_format: { type: 'json_object' },
+        temperature: 0.35,
+        messages: [
+          { role: 'system', content: fullSystem },
+          ...input.recentHistory.map((m) => ({ role: m.role, content: m.content })),
+          { role: 'user', content: input.userMessage },
+        ],
+      }),
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new BadRequestException(`Error en OpenAI Training (${res.status}): ${errText.slice(0, 200)}`);
+    }
+
+    const data = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>;
+    };
+    const raw = data.choices?.[0]?.message?.content || '{}';
+    return this.parseTrainingJson(raw);
+  }
+
+  private parseTrainingJson(rawText: string): {
+    reply: string;
+    mode: 'SETUP' | 'ROLEPLAY' | 'CORRECTION';
+    learnedRule: { instruction: string; category: string } | null;
+  } {
+    try {
+      const cleaned = rawText
+        .replace(/^```json\s*/i, '')
+        .replace(/```\s*$/i, '')
+        .trim();
+      const parsed = JSON.parse(cleaned) as Record<string, unknown>;
+      const mode = (['SETUP', 'ROLEPLAY', 'CORRECTION'].includes(String(parsed.mode))
+        ? String(parsed.mode)
+        : 'ROLEPLAY') as 'SETUP' | 'ROLEPLAY' | 'CORRECTION';
+
+      let learnedRule: { instruction: string; category: string } | null = null;
+      if (
+        mode === 'CORRECTION' &&
+        parsed.learnedRule &&
+        typeof parsed.learnedRule === 'object' &&
+        (parsed.learnedRule as Record<string, unknown>).instruction
+      ) {
+        const lr = parsed.learnedRule as Record<string, unknown>;
+        learnedRule = {
+          instruction: String(lr.instruction),
+          category: String(lr.category || 'GENERAL').toUpperCase(),
+        };
+      }
+
+      return {
+        reply: String(parsed.reply || 'Modo Entrenamiento activo. Continúa por favor.'),
+        mode,
+        learnedRule,
+      };
+    } catch {
+      return {
+        reply: rawText || 'Modo Entrenamiento activo. ¿Cómo deseas continuar?',
+        mode: 'ROLEPLAY',
+        learnedRule: null,
+      };
+    }
+  }
 }

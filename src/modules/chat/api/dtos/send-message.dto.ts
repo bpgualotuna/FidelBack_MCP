@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsBoolean, IsIn, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 import { ProductLineKey } from '../../domain/interfaces/llm-gateway.port';
 
 export class SendMessageDto {
@@ -57,6 +57,19 @@ export class SendMessageDto {
   @IsString()
   @IsOptional()
   customSystemPrompt?: string;
+
+  @ApiPropertyOptional({
+    default: false,
+    description: 'Si es true, Fidel entra en Modo Entrenamiento (Roleplay / Corrección) y guarda reglas aprendidas.',
+  })
+  @IsBoolean()
+  @IsOptional()
+  trainingMode?: boolean;
+
+  @ApiPropertyOptional({ description: 'Nombre del entrenador o supervisor que envía la corrección' })
+  @IsString()
+  @IsOptional()
+  trainerName?: string;
 }
 
 export class TestLlmConnectionDto {
@@ -79,4 +92,49 @@ export class UpdateSessionStatusDto {
   @ApiProperty({ enum: ['AI_ACTIVE', 'HUMAN_ACTIVE', 'CLOSED'] })
   @IsIn(['AI_ACTIVE', 'HUMAN_ACTIVE', 'CLOSED'])
   status!: 'AI_ACTIVE' | 'HUMAN_ACTIVE' | 'CLOSED';
+}
+
+export class CreateTrainingRuleDto {
+  @ApiProperty({ example: 'Usar máximo 1 emoji y preguntar primero por la empresa.' })
+  @IsString()
+  @IsNotEmpty()
+  instruction!: string;
+
+  @ApiPropertyOptional({ enum: ['ESTILO', 'COMERCIAL', 'OBJECIONES', 'GENERAL'], default: 'GENERAL' })
+  @IsString()
+  @IsOptional()
+  category?: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  sourceFeedback?: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  createdByName?: string;
+}
+
+export class ToggleTrainingRuleDto {
+  @ApiProperty()
+  @IsBoolean()
+  isActive!: boolean;
+}
+
+export class SandboxTrainingTurnDto {
+  @ApiProperty({ example: 'Hola Fidel, vamos a practicar. Quiero saber cuánto cuesta el curso AWS.' })
+  @IsString()
+  @IsNotEmpty()
+  message!: string;
+
+  @ApiPropertyOptional({ default: [] })
+  @IsArray()
+  @IsOptional()
+  history?: Array<{ role: 'trainer' | 'fidel'; text: string }>;
+
+  @ApiPropertyOptional({ default: 'Entrenador' })
+  @IsString()
+  @IsOptional()
+  trainerName?: string;
 }
