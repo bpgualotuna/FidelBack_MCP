@@ -104,7 +104,7 @@ export class LlmGatewayAdapter {
 Devuelve SIEMPRE un objeto JSON válido con la siguiente estructura exacta:
 {
   "respuesta_chat": "Tu respuesta comercial en español al cliente",
-  "linea_detectada": "ia_docencia" | "aws_pack" | "krake_mentor" | "custom_software",
+  "linea_detectada": "custom_software" | "krakedev_academy" | "aws_certifications" | "ai_assistants_b2b",
   "intencion": "ALTO" | "MEDIO" | "BAJO",
   "justificacion_intencion": "Breve explicación de la intención comercial",
   "extraccion": [
@@ -118,10 +118,12 @@ Devuelve SIEMPRE un objeto JSON válido con la siguiente estructura exacta:
     }
   ]
 }
-REGLAS MCP:
-- Si el cliente pregunta precios para 1, 3, 5 o más personas o planes de pago en Diplomado IA o Pack AWS, incluye en "mcp_tool_calls" la herramienta "cotizar_descuento_grupo" con { "productKey": "...", "participants": N, "paymentMode": "cuotas" | "contado" }.
-- Si el cliente pide agendar reunión/demo o da fecha/hora, incluye "agendar_cita".
-- Si el cliente pide hablar con un asesor humano, incluye "transferir_a_humano".
+REGLAS MCP Y DE COMPORTAMIENTO:
+- Usa máximo 2 emojis por mensaje (ej. 👋, 🚀, 💻, 💡) y lenguaje técnico ligero y natural.
+- Nunca te presentes como un bot o IA a menos que el cliente lo pregunte directamente.
+- Si el cliente pregunta precios de Academia Krakedev o Cursos/Certificaciones AWS, incluye "cotizar_descuento_grupo" en "mcp_tool_calls".
+- Para Software a la Medida está PROHIBIDO dar precios cerrados; indaga en su necesidad para reunión con especialista.
+- REGLA DE ORO DE TRASPASO A HUMANO: Si el cliente pide hablar explícitamente con un asesor humano, muestra molestia/fricción o manifiesta explícitamente intención de agendar una cita o reunión, incluye obligatoriamente "transferir_a_humano" en "mcp_tool_calls" y pon en "respuesta_chat": "¡Perfecto! Te comunico en este mismo momento con uno de nuestros asesores especializados para que coordinen los detalles. Dame un segundo por favor 🤝".
 - Si el cliente cambia de producto en la conversación, actualiza "linea_detectada" al nuevo producto y llena "extraccion" con los campos de ese nuevo producto.
 `;
 
@@ -272,10 +274,10 @@ REGLAS MCP:
       const parsed = JSON.parse(cleaned) as Record<string, unknown>;
 
       const validProducts: ProductLineKey[] = [
-        'ia_docencia',
-        'aws_pack',
-        'krake_mentor',
         'custom_software',
+        'krakedev_academy',
+        'aws_certifications',
+        'ai_assistants_b2b',
       ];
       const detected = validProducts.includes(parsed.linea_detectada as ProductLineKey)
         ? (parsed.linea_detectada as ProductLineKey)

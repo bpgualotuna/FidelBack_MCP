@@ -114,43 +114,62 @@ export class McpRegistryService {
     try {
       switch (toolName) {
         case 'cotizar_descuento_grupo': {
-          const productKey = String(args.productKey || 'ia_docencia');
-          const participants = Math.max(1, Number(args.participants || 1));
-          const paymentMode = String(args.paymentMode || 'cuotas');
+          const productKey = String(args.productKey || 'krakedev_academy');
+          const count = Math.max(1, Number(args.participants || 1));
+          const paymentMode = String(args.paymentMode || 'contado');
 
-          let unitPrice = 249;
-          let regularPrice = 360;
-          let installmentPlan = 'Inscripción de $69 + 3 cuotas mensuales de $60';
+          if (productKey === 'krakedev_academy') {
+            const enrollmentFee = 40;
+            const firstModule = 280;
+            const totalPerStudent = enrollmentFee + firstModule;
+            const totalInvestment = totalPerStudent * count;
 
-          if (productKey === 'ia_docencia') {
-            regularPrice = 360;
-            if (participants >= 5) {
-              unitPrice = 199;
-              installmentPlan = 'Tarifa corporativa 5+ ($199 c/u)';
-            } else if (participants >= 3) {
-              unitPrice = 209;
-              installmentPlan = 'Tarifa grupal 3+ ($209 c/u)';
-            } else if (paymentMode === 'contado') {
-              unitPrice = 230;
-              installmentPlan = 'Pago único de contado ($230)';
-            } else {
-              unitPrice = 249;
+            const result: McpToolExecutionResult = {
+              toolName,
+              success: true,
+              timestamp,
+              data: {
+                productKey,
+                participants: count,
+                paymentMode,
+                enrollmentUsd: enrollmentFee,
+                firstModuleUsd: firstModule,
+                totalPerStudentUsd: totalPerStudent,
+                totalInvestmentUsd: totalInvestment,
+                modality: '100% Online, interactiva y con acompañamiento cercano',
+              },
+              message: `Cotización Krakedev (Oferta promocional): Matrícula $${enrollmentFee} USD + Primer módulo $${firstModule} USD (Total por estudiante: $${totalPerStudent} USD).`,
+            };
+            this.recordExecution(result);
+            return result;
+          } else if (productKey === 'aws_certifications') {
+            let totalInvestment = 195;
+            let planLabel = 'Certificación individual AWS ($195 USD c/u)';
+
+            if (count >= 3) {
+              totalInvestment = 320;
+              planLabel = 'Combo 3 certificaciones AWS ($320 USD)';
+            } else if (count === 2) {
+              totalInvestment = 280;
+              planLabel = 'Combo 2 certificaciones AWS ($280 USD)';
             }
-          } else if (productKey === 'aws_pack') {
-            regularPrice = 450;
-            if (participants >= 5) {
-              unitPrice = 220;
-              installmentPlan = 'Tarifa corporativa 5+ ($220 c/u)';
-            } else if (participants >= 3) {
-              unitPrice = 235;
-              installmentPlan = 'Tarifa grupal 3+ ($235 c/u)';
-            } else if (paymentMode === 'contado') {
-              unitPrice = 250;
-              installmentPlan = 'Pago único de contado ($250)';
-            } else {
-              unitPrice = 279;
-              installmentPlan = 'Inscripción de $99 + 2 cuotas mensuales de $90';
-            }
+
+            const result: McpToolExecutionResult = {
+              toolName,
+              success: true,
+              timestamp,
+              data: {
+                productKey,
+                certificationsCount: count,
+                paymentMode,
+                totalInvestmentUsd: totalInvestment,
+                planLabel,
+                includesVoucher: true,
+              },
+              message: `${planLabel} — Total: $${totalInvestment} USD. Incluye acompañamiento de preparación y voucher oficial del examen.`,
+            };
+            this.recordExecution(result);
+            return result;
           } else {
             const customResult: McpToolExecutionResult = {
               toolName,
@@ -158,37 +177,17 @@ export class McpRegistryService {
               timestamp,
               data: {
                 productKey,
-                participants,
-                quotationType: 'B2B_CUSTOM',
-                recommendation: 'Agendar demo o sesión de arquitectura ejecutiva sin costo.',
+                quotationType: 'NO_FIXED_PRICE',
+                recommendation:
+                  productKey === 'ai_assistants_b2b'
+                    ? 'Indagar proceso a automatizar y proponer sesión técnica breve (accesos anticipados / piloto a medida).'
+                    : 'No dar precios cerrados; levantar requerimientos específicos en reunión con especialista.',
               },
-              message: `Cotización B2B preparada para ${productKey}.`,
+              message: `Sin precio cerrado para ${productKey}: requiere levantamiento técnico/comercial con especialista.`,
             };
             this.recordExecution(customResult);
             return customResult;
           }
-
-          const totalInvestment = unitPrice * participants;
-          const totalRegular = regularPrice * participants;
-          const totalSavings = totalRegular - totalInvestment;
-
-          const result: McpToolExecutionResult = {
-            toolName,
-            success: true,
-            timestamp,
-            data: {
-              productKey,
-              participants,
-              paymentMode,
-              unitPriceUsd: unitPrice,
-              totalInvestmentUsd: totalInvestment,
-              totalSavingsUsd: totalSavings,
-              installmentPlan,
-            },
-            message: `Cotización calculada: ${participants} participante(s) en ${productKey} -> $${unitPrice} USD c/u (Total: $${totalInvestment} USD, Ahorro: $${totalSavings} USD).`,
-          };
-          this.recordExecution(result);
-          return result;
         }
 
         case 'agendar_cita': {
@@ -235,7 +234,7 @@ export class McpRegistryService {
 
         case 'registrar_lead_crm': {
           const sessionId = String(args.sessionId || '');
-          const productKey = String(args.productKey || 'ia_docencia');
+          const productKey = String(args.productKey || 'custom_software');
           const intentLevel = String(args.intentLevel || 'MEDIO');
           const extractedFields =
             (args.extractedFields as Record<string, unknown>) ?? {};

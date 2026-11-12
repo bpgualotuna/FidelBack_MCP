@@ -13,7 +13,7 @@ export interface McpResourceDefinition {
   name: string;
   description: string;
   mimeType: string;
-  productKey: 'ia_docencia' | 'aws_pack' | 'krake_mentor' | 'custom_software';
+  productKey: 'custom_software' | 'krakedev_academy' | 'aws_certifications' | 'ai_assistants_b2b';
   content: string;
   requiredFields: string[];
 }

@@ -12,9 +12,9 @@ export class ExecuteMcpToolDto {
 
   @ApiProperty({
     example: {
-      productKey: 'ia_docencia',
-      participants: 3,
-      paymentMode: 'cuotas',
+      productKey: 'aws_certifications',
+      participants: 2,
+      paymentMode: 'contado',
     },
     description: 'Argumentos estructurados para la herramienta MCP.',
   })

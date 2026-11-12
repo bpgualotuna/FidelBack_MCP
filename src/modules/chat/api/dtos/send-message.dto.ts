@@ -9,7 +9,7 @@ export class SendMessageDto {
   sessionId!: string;
 
   @ApiProperty({
-    example: 'Hola, somos 3 docentes interesados en el Diplomado de IA. ¿Cuánto nos cuesta en cuotas?',
+    example: 'Hola, estoy interesado en las certificaciones de AWS. ¿Qué precios tienen?',
   })
   @IsString()
   @IsNotEmpty()
@@ -41,10 +41,10 @@ export class SendMessageDto {
   apiKey?: string;
 
   @ApiPropertyOptional({
-    enum: ['ia_docencia', 'aws_pack', 'krake_mentor', 'custom_software'],
-    example: 'ia_docencia',
+    enum: ['custom_software', 'krakedev_academy', 'aws_certifications', 'ai_assistants_b2b'],
+    example: 'krakedev_academy',
   })
-  @IsIn(['ia_docencia', 'aws_pack', 'krake_mentor', 'custom_software'])
+  @IsIn(['custom_software', 'krakedev_academy', 'aws_certifications', 'ai_assistants_b2b'])
   @IsOptional()
   activeProductKey?: ProductLineKey;
 

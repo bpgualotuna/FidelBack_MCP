@@ -42,7 +42,7 @@ export class ProcessInboundMessageUseCase {
 
   getOrCreateMemorySession(
     sessionId: string,
-    initialProductKey: ProductLineKey = 'ia_docencia',
+    initialProductKey: ProductLineKey = 'custom_software',
     tenantSlug = 'clearminds',
   ): InMemorySessionState {
     const existing = this.sessions.get(sessionId);
@@ -124,7 +124,7 @@ export class ProcessInboundMessageUseCase {
 
     const session = this.getOrCreateMemorySession(
       params.sessionId,
-      params.activeProductKey || 'ia_docencia',
+      params.activeProductKey || 'custom_software',
       resolvedTenantSlug,
     );
 
@@ -159,10 +159,22 @@ export class ProcessInboundMessageUseCase {
     }
 
     const tenantConfig = await this.crmService.getTenantConfig(resolvedTenantSlug);
-    const allBrochuresContext = CLEARMINDS_MCP_RESOURCES.map(
-      (r: McpResourceDefinition) =>
-        `### [${r.productKey}] ${r.name}\nCampos requeridos: ${r.requiredFields.join(', ')}\n${r.content}`,
-    ).join('\n\n');
+    const isClearMinds = resolvedTenantSlug === 'clearminds';
+
+    const allBrochuresContext = isClearMinds
+      ? CLEARMINDS_MCP_RESOURCES.map(
+          (r: McpResourceDefinition) =>
+            `### [${r.productKey}] ${r.name}\nCampos requeridos: ${r.requiredFields.join(', ')}\n${r.content}`,
+        ).join('\n\n')
+      : tenantConfig.productLines && tenantConfig.productLines.length > 0
+        ? tenantConfig.productLines
+            .map((p: Record<string, unknown>) =>
+              'id' in p
+                ? `### [${String(p.id)}] ${String(p.name)}\n${String(p.systemInstructions)}`
+                : `### [${String(p.key)}] ${String(p.title)}\n${String(p.brochureContext)}`,
+            )
+            .join('\n\n')
+        : 'Usa estrictamente la información y datos contextuales proporcionados en la conversación.';
 
     const activeResource =
       CLEARMINDS_MCP_RESOURCES.find(
@@ -171,7 +183,7 @@ export class ProcessInboundMessageUseCase {
 
     const systemPrompt =
       params.customSystemPrompt?.trim() ||
-      `Eres ${tenantConfig.tenant.agentName}, ${tenantConfig.tenant.agentRole} de la empresa "${tenantConfig.tenant.name}" (tenant: ${resolvedTenantSlug}).\nTONO: ${tenantConfig.tenant.tone}\nPOLÍTICA Y REGLAS DE LA EMPRESA:\n${tenantConfig.tenant.globalRules}\n\nCATÁLOGO OFICIAL MCP:\n${allBrochuresContext}`;
+      `Eres ${tenantConfig.tenant.agentName}, ${tenantConfig.tenant.agentRole} de la empresa "${tenantConfig.tenant.name}" (tenant: ${resolvedTenantSlug}).\nTONO: ${tenantConfig.tenant.tone}\nPOLÍTICA Y REGLAS DE LA EMPRESA:\n${tenantConfig.tenant.globalRules}\n\nCATÁLOGO / CONOCIMIENTO:\n${allBrochuresContext}`;
 
     const recentHistory = session.history
       .slice(-8, -1)
